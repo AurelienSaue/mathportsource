@@ -55,14 +55,16 @@ structure Path34 where
 -- TODO: config file?
 -------------------------------
 def MODULES : Array ModuleInfo := #[
-  ModuleInfo.mk "Mathlib"  "mathlib/src",
-  ModuleInfo.mk "Lean3Lib" "lean3/library",
-  ModuleInfo.mk "Lean3Pkg" "lean3/leanpkg"
+  -- TEMP
+  ModuleInfo.mk "Mathlib"  "../mathport/mathlib/src",
+  ModuleInfo.mk "Lean3Lib" "../mathport/lean3/library",
+  ModuleInfo.mk "Lean3Pkg" "../mathport/lean3/leanpkg"
 ]
 
 def Lib4Path : String := "Lib4"
 
-def Lean4LibPath : String := "lean4/build/release/stage1/lib/lean"
+-- TEMP
+def Lean4LibPath : String := "../mathport/lean4/build/release/stage1/lib/lean"
 -------------------------------
 -- END CONFIG
 -------------------------------
@@ -72,6 +74,9 @@ def Path34.toLean3 (p : Path34) (suffix : String) : String :=
 
 def Path34.toTLean (p : Path34) : String :=
   p.toLean3 ".tlean"
+
+def Path34.toLean3Source (p : Path34) : String :=
+  p.toLean3 ".lean"
 
 def Path34.toLean4dot (p : Path34) : String :=
   ".".intercalate [p.modInfo.l4name, p.mrpath.toDotPath.path]
