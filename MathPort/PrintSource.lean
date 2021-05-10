@@ -10,7 +10,7 @@ def useSorry := true
 def doFilter := true
 def declareUniverses := true
 def importPostport := false
-
+def printIgnored := true
 
 -- Utils
 
@@ -68,7 +68,7 @@ def Lean.Name.removePrefix (n : Name) (pfx : Name) : IO Name :=
   else 
     match n with
     | Name.anonymous => do 
-      println! "Invalid suffix {pfx} for {n}"
+      println! "Invalid prefix {pfx} for {n}"
       arbitrary
     | Name.str p s _ => do Name.mkStr (← removePrefix p pfx) s
     | Name.num p n _ => do Name.mkNum (← removePrefix p pfx) n
@@ -102,25 +102,23 @@ def levelParamsToMessageData (levelParams : List Name) : MessageData :=
     return m ++ "}"
 
 
-def mkHeader (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) (safety : DefinitionSafety) (numParams : Option Nat := none): MetaM String := do
-  let simpNames ← (← Meta.getSimpLemmas).lemmaNames
+def mkHeader (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) (safety : DefinitionSafety) (numParams : Option Nat := none): PortM String := do
+  let info ← (← get).name2info.find! id
   let m : MessageData :=
-    if simpNames.contains id then "@[simp] " else ""
+    if info.simp then "@[simp] " else ""
   let m := m ++
     match safety with
     | DefinitionSafety.unsafe  => "unsafe "
     | DefinitionSafety.partial => "partial "
     | DefinitionSafety.safe    => ""
-  let m := if isProtected (← getEnv) id then m ++ "protected " else m
-
+  let m := if info.protected then m ++ "protected " else m
   let (m, shortid) : MessageData × IO Name := do 
     match privateToUserName? (removeMathlibPrefix id) with
       | some shid => (m ++ "private ", shid)
       | none    => do 
         return (m, id.removePrefix currNamespace)
 
-  let env ← (← getEnv)
-  let kind := if Meta.isGlobalInstance env id then "instance" else kind
+  let kind := if info.instance then "instance" else kind
 
   let m := m ++ kind ++ " " ++ (← shortid)
   if declareUniverses then 
@@ -150,35 +148,62 @@ def mkHeader (kind : String) (id : Name) (levelParams : List Name) (type : Expr)
 
     s := s ++ ": " ++ toString (← PrettyPrinter.ppExpr currNamespace [] resType)
     s
-  let stype : MetaM String:= Meta.forallBoundedTelescope type numParams formatType
+  let stype : String ← liftMetaM (@Meta.forallBoundedTelescope MetaM _ _ _ type numParams formatType)
   
-  return (← m.toString) ++ (← stype)
+  return (← m.toString) ++ stype
 
 
-def printDefLike (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (value : Expr) (currNamespace : Name) (safety := DefinitionSafety.safe) : MetaM String := do
+def printDefLike (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (value : Expr) (currNamespace : Name) (safety := DefinitionSafety.safe) : PortM String := do
   let mut m : String := (← mkHeader kind id levelParams type currNamespace safety)
   if useSorry then
     m := m ++ " := sorry\n\n"
   else
-    m := m ++ " :=\n" ++ (toString (← PrettyPrinter.ppExpr currNamespace [] value))
+    m := m ++ " :=\n" ++ (toString (← liftMetaM $ PrettyPrinter.ppExpr currNamespace [] value))
   pure m
 
-def mkHeader' (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (isUnsafe : Bool) (currNamespace : Name) (numParams : Option Nat := none): MetaM String :=
+def mkHeader' (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (isUnsafe : Bool) (currNamespace : Name) (numParams : Option Nat := none): PortM String :=
   mkHeader kind id levelParams type currNamespace (if isUnsafe then DefinitionSafety.unsafe else DefinitionSafety.safe) numParams
 
-def printAxiomLike (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) (isUnsafe := false) : MetaM String := do
+def printAxiomLike (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) (isUnsafe := false) : PortM String := do
   mkHeader' kind id levelParams type isUnsafe currNamespace
 
-def printQuot (kind : QuotKind) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) : MetaM String := do
+def printQuot (kind : QuotKind) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) : PortM String := do
   printAxiomLike "Quotient primitive" id levelParams type currNamespace
 
 def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndices : Nat) (type : Expr)
-    (ctors : List Name) (isUnsafe : Bool) (currNamespace : Name) (keyword : String): MetaM String := do
-  let env ← getEnv
+    (ctors : List Name) (isUnsafe : Bool) (currNamespace : Name) (keyword : String): PortM String := do
+  let info ← (← get).name2info.find! id
 
-  if ctors.length = 1 && keyword = "structure" then
+  let mut struct := false
+  if ctors.length = 1 then 
+    let ctor ← ctors.head!
+
+    let name2info ← (← get).name2info
+
+    let checkFields (fields : Array Expr) (resType : Expr) : MetaM Bool := do 
+      let mut res := true
+      let mut i := 0
+      let ctx ← getLCtx
+      for field in fields do
+        if i >= numParams then
+          println! "field {field}: {id ++ (ctx.getFVar! field).userName}"
+          let isDefined ← name2info.contains $ id ++ (ctx.getFVar! field).userName
+          println! "contains {isDefined}"
+          res := res && isDefined
+        i := i + 1
+      res
+    
+    let cinfo ← getConstInfo ctor
+
+    
+    struct := (← liftMetaM $ Meta.forallBoundedTelescope cinfo.type none checkFields)
+
+
+
+
+  if struct then
     let kind ← do 
-      if isClass env id then "class"
+      if info.class then "class"
       else "structure"
     println! "STRUCTURE kind: {kind} numParams: {numParams} numIndices: {numIndices}"
     let mut m ← mkHeader' kind id levelParams type isUnsafe currNamespace numParams
@@ -210,15 +235,15 @@ def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndi
     let cinfo ← getConstInfo ctor
 
     if ctor.last = "mk" then 
-      m := m ++ (← Meta.forallBoundedTelescope cinfo.type none formatFields)
+      m := m ++ (← liftMetaM $ Meta.forallBoundedTelescope cinfo.type none formatFields)
     else 
-      m := m ++ "\n  " ++ ctor.last ++ " ::" ++ (← Meta.forallBoundedTelescope cinfo.type none formatFieldsCustomCtor)
-    return m
+      m := m ++ "\n  " ++ ctor.last ++ " ::" ++ (← liftMetaM $ Meta.forallBoundedTelescope cinfo.type none formatFieldsCustomCtor)
+    return m ++ "\n\n"
   else
     let kind ← do 
-      if isClass env id then "class inductive"
+      if info.class then "class inductive"
       else "inductive"
-    println! "INDUCTIVE kind: {kind} numParams: {numParams} numIndices: {numIndices}"
+    println! "INDUCTIVE {id} kind: {kind} numParams: {numParams} numIndices: {numIndices}"
 
     let mut m ← mkHeader' kind id levelParams type isUnsafe currNamespace numParams
     m := m ++ "\nwhere"
@@ -238,21 +263,21 @@ def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndi
     for ctor in ctors do
       let cinfo ← getConstInfo ctor
       m := m ++ "\n| " ++ (← ctor.removePrefix id).toString
-      m := m ++ (← Meta.forallBoundedTelescope cinfo.type (some numParams) formatCtorType)
-    return m
+      m := m ++ (← liftMetaM $ Meta.forallBoundedTelescope cinfo.type (some numParams) formatCtorType)
+    return m ++ "\n\n"
 
 def printStruct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndices : Nat) (type : Expr)
-    (ctors : List Name) (isUnsafe : Bool) (currNamespace : Name) : MetaM String := do
+    (ctors : List Name) (isUnsafe : Bool) (currNamespace : Name) : PortM String := do
   let mut m ← mkHeader' "structure" id levelParams type isUnsafe currNamespace
   m := m ++ "\nwhere"
   for ctor in ctors do
     let cinfo ← getConstInfo ctor
-    m := m ++ "\n| " ++ (← ctor.removePrefix id).toString ++ " : " ++ (toString (← PrettyPrinter.ppExpr currNamespace [] cinfo.type))
+    m := m ++ "\n| " ++ (← ctor.removePrefix id).toString ++ " : " ++ (toString (← liftMetaM $ PrettyPrinter.ppExpr currNamespace [] cinfo.type))
   return m
 
 
 
-def constantToString (id : Name) (currNamespace : Name) (keyword : String): MetaM String := do
+def constantToString (id : Name) (currNamespace : Name) (keyword : String): PortM String := do
   match (← getEnv).find? id with
   | ConstantInfo.defnInfo  { levelParams := us, type := t, value := v, safety := s, .. } => printDefLike "def" id us t v currNamespace s 
   | ConstantInfo.thmInfo  { levelParams := us, type := t, value := v, .. } => printDefLike "theorem" id us t v currNamespace

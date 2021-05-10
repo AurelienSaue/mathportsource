@@ -28,7 +28,5 @@ unsafe def main (args : List String) : IO Unit := do
     | "mathlib" => MathPort.run proofs source $ Path34.mk MODULES[0] ⟨file⟩
     | _         => throw $ IO.userError "Second argument <lib> must be 'lean3' or 'mathlib'"
   | _ => throw $ IO.userError "Expected <proof> <lib>"
-  
 
-
-#eval main ["0", "1", "mathlib", "algebra/algebra/operations"]
+#eval main ["0", "1", "lean3", "init/data/bool/basic"]

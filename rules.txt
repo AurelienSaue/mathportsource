@@ -9,7 +9,6 @@ rename quot.mk Quot.mk
 rename quot.lift Quot.lift
 rename quot.ind Quot.ind
 
-align id_delta idDelta
 align id_rhs idRhs
 align out_param outParam
 align opt_param optParam
@@ -141,9 +140,16 @@ align list List
 align list.nil List.nil
 align list.cons List.cons
 
+align option Option
+align option.none Option.none
+align option.some Option.some
+
 align nat Nat
 align nat.zero Nat.zero
 align nat.succ Nat.succ
+
+align nat.pred Nat.pred
+align nat.pred._main Nat.pred
 
 align nat.add Nat.add
 align nat.add._main Nat.add
@@ -169,8 +175,6 @@ align has_sizeof.mk SizeOf.mk
 
 noinst bool.decidable_eq
 noinst nat.decidable_eq
-noinst nat.decidable_lt
-noinst nat.decidable_le
 noinst and.decidable
 noinst or.decidable
 noinst iff.decidable
@@ -182,17 +186,57 @@ noinst exists_prop_decidable
 noinst forall_prop_decidable
 noinst int.decidable_eq
 
+# TODO: currently, Mathlib's `<` on `Nat` differs from Lean4's
+# (and Mathlib's `<` is not being recognized as `decidable`)
+# noinst nat.decidable_lt
+# noinst nat.decidable_le
+
 neversorry of_as_true
 
+
 #
-# Things that (last we checked) took too long to check or went OOM
+# Control
 #
-sorry cauchy_seq_finset_of_geometric_bound
-sorry lie_module.derived_series_le_lower_central_series
-sorry has_fpower_series_at.comp
+
+align has_pure Pure
+align has_pure.mk Pure.mk
+align has_pure.pure Pure.pure
+
+align has_seq Seq
+align has_seq.mk Seq.mk
+align has_seq.seq Seq.seq
+
+align has_seq_left SeqLeft
+align has_seq_left.mk SeqLeft.mk
+align has_seq_left.seq_left SeqLeft.seqLeft
+
+align has_seq_right SeqRight
+align has_seq_right.mk SeqRight.mk
+align has_seq_right.seq_right SeqRight.seqRight
+
+align functor Functor
+align functor.mk Functor.mk
+align functor.map Functor.map
+align functor.map_const Functor.mapConst
+
+align applicative Applicative
+align applicative.mk Applicative.mk
+align applicative.map Applicative.map
+align applicative.seq_left Applicative.seqLeft
+align applicative.seq_right Applicative.seqRight
+
+align has_bind Bind
+align has_bind.mk Bind.mk
+align has_bind.bind Bind.bind
+
+align monad Monad
+align monad.mk Monad.mk
+align monad.map Monad.map
+align monad.seq Monad.seq
 
 #
 # Things that are added in PrePort
+#
 
 align bit0 Mathlib.bit0
 align bit1 Mathlib.bit1
