@@ -58,37 +58,50 @@ constant withImportModulesConst {α : Type} (imports : List Import) (opts : Opti
   throw $ IO.userError "NYI"
 
 def initialComment (hsource3 : IO.FS.Handle) : PortM String := do 
+  println! "finding initial comment"
   let mut res := ""
-  let mut line := ""
+  let mut line := (← hsource3.getLine)
+
+  if not $ line.startsWith "/-" then 
+    return ""
+  res := res ++ line
   while not $ line.endsWith "-/\n" do
     line := (← hsource3.getLine)
     res := res ++ line
+    println! "initial comment: {line}"
     modify λ s => { s with currLine := s.currLine + 1}
   return res
 
 
 def processSource3Lines (hsource3 : IO.FS.Handle) (startLine : Nat) (endLine : Nat): PortM String := do 
   
-  let mut comment := false
   let mut res := ""
+  println! "processing source lines {startLine} to {endLine}"
   for i in [startLine : endLine] do 
     println! "printligne {i}"
     let line ← hsource3.getLine 
 
     if line.startsWith "--" then 
       println! "comment '{line}'"
-      res := res ++ line
+      res := res ++ line ++ "\n"
 
-    if comment || line.startsWith "/-" then 
+    if (← get).docstring || line.startsWith "/--" then 
+      println! "docstring '{line}'"
+      modify λ s => { s with docstring := true}
+      res := res ++  line
+    else if (← get).comment || line.startsWith "/-" then 
       println! "comment '{line}'"
-      comment := true
+      modify λ s => { s with comment := true}
       res := res ++  line
       
-    if comment && line.endsWith "-/\n" then 
+    if (← get).comment && line.endsWith "-/\n" then 
       println! "end of comment"
-      comment := false
+      modify λ s => { s with comment := false}
       res := res ++"\n"
-      
+    else if (← get).docstring && line.endsWith "-/\n" then 
+      println! "end of docstring"
+      modify λ s => { s with docstring := false}
+      res := res
     
     if line.startsWith "namespace" then 
       match line.splitOn " " with 
@@ -115,7 +128,7 @@ def processSource3Lines (hsource3 : IO.FS.Handle) (startLine : Nat) (endLine : N
 def genOLeanFor (proofs : Bool) (source : Bool) (target : Path34) : IO Unit := do
   println! s!"[genOLeanFor] START {target.mrpath.path}"
   createDirectoriesIfNotExists target.toLean4olean
-
+  println! "directories created"
   let imports : List Import := [{ module := `Init : Import }, { module := `PrePort : Import }]
     ++ (← parseTLeanImports target).map fun path => { module := parseName path.toLean4dot }
 
@@ -206,7 +219,7 @@ partial def visit (depth : Nat) (target : Path34) : RunM Job := do
   match (← get).path2task.find? target.toTLean with
   | some task => pure task
   | none      => do
-    if (← IO.fileExists target.toLean4autolean) && depth > 0 then
+    if (← IO.fileExists target.toLean4autolean) && (← IO.fileExists target.toLean4olean) && depth > 0 then
       IO.asTask (pure ())
     else
       let paths ← parseTLeanImports target
