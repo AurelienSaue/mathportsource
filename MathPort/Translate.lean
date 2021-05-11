@@ -36,6 +36,25 @@ partial def translateName (s : State) (env : Environment) (n : Name) : Name := d
   where
     dflt n := `Mathlib ++ n
 
+partial def translateNamePrint (s : State) (env : Environment) (n : Name) : Name := do
+  if n.isStr && n.getString! == "rec" && not n.getPrefix.isAnonymous then
+    let newIndName := translateName s env n.getPrefix
+    match env.find? newIndName with
+    | none => dflt n
+    | some cInfo =>
+      match cInfo with
+      | ConstantInfo.inductInfo _ =>
+        if env.contains (mkOldRecName newIndName) then mkOldRecName newIndName
+        else newIndName ++ "rec"
+      | _ => dflt n
+  else if n.isStr && (n.getString! == "below" || n.getString! == "ibelow") then
+    let newName := Name.mkStr (dflt n.getPrefix) ("old_" ++ n.getString!)
+    newName
+  else dflt n
+
+where
+  dflt n := `Mathlib ++ n
+
 def doubleCheck (e e' : Expr) : MetaM TransformStep := do
   if (← Meta.isDefEq e e') then TransformStep.done e'
   else throwError "[translateNumber] broke def-eq, \n{e}\n\n!=\n\n{e'}"

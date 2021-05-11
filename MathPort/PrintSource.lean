@@ -69,7 +69,7 @@ def Lean.Name.removePrefix (n : Name) (pfx : Name) : IO Name :=
     match n with
     | Name.anonymous => do 
       println! "Invalid prefix {pfx} for {n}"
-      arbitrary
+      Name.anonymous
     | Name.str p s _ => do Name.mkStr (← removePrefix p pfx) s
     | Name.num p n _ => do Name.mkNum (← removePrefix p pfx) n
 

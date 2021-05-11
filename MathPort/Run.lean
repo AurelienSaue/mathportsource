@@ -206,7 +206,7 @@ partial def visit (depth : Nat) (target : Path34) : RunM Job := do
   match (← get).path2task.find? target.toTLean with
   | some task => pure task
   | none      => do
-    if (← IO.fileExists target.toLean4olean) && depth > 0 then
+    if (← IO.fileExists target.toLean4autolean) && depth > 0 then
       IO.asTask (pure ())
     else
       let paths ← parseTLeanImports target
