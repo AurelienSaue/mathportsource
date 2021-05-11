@@ -24,6 +24,7 @@ structure DeclInfo where
   «protected»   : Bool  := false
   «private»     : Bool  := false
   simp          : Bool  := false
+  type          : Expr  := arbitrary
   deriving Inhabited
 
 structure Context where
@@ -52,6 +53,8 @@ structure State extends ExportInfo, Rules where
   «universes»    : Array Name               := {}
   name2info      : HashMap Name DeclInfo    := {}
   currLine       : Nat                      := 0
+  comment        : Bool                     := false
+  docstring      : Bool                     := false
   currNamespace  : Name                     := `Mathlib
 
 
