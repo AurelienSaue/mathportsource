@@ -6,7 +6,7 @@ open Lean
 open MathPort
 -- Options
 
-def useSorry := true
+def useSorry := false
 def doFilter := true
 def declareUniverses := true
 def importPostport := true
@@ -52,6 +52,11 @@ def containsStrAux : (s : List Char) →  (subStr : List Char) → Bool
 def String.containsStr (s : String) (subStr : String) : Bool :=
   containsStrAux s.data subStr.data
 
+def replaceAux (c : Char) (toInsert : String): List Char → List Char 
+  | c₁::t => if c₁ = c then toInsert.data ++ (replaceAux c toInsert t) else c₁::(replaceAux c toInsert t)
+  | [] => []
+def String.replace (s : String) (c : Char) (toInsert : String) : String :=
+  ⟨replaceAux c toInsert s.data⟩
 def Lean.Name.last : Name → String
 | Name.str _ s _  => s
 | Name.num _ n _  => toString n
@@ -92,7 +97,176 @@ def Lean.Expr.forallRoot : (type : Expr) → Expr
   | Expr.forallE _ _ e _ => forallRoot e
   | e => e
 
+private def getDefInfoTemp (info : ConstantInfo) : MetaM (Option ConstantInfo) := do
+  match (← Lean.Meta.getTransparency) with
+  | Lean.Meta.TransparencyMode.all => return some info
+  | Lean.Meta.TransparencyMode.default => return some info
+  | _ =>
+    if (← isReducible info.name) then
+      return some info
+    else
+      return none
+private def getConstTemp? (constName : Name) : MetaM (Option ConstantInfo) := do
+  let env ← getEnv
+  match env.find? constName with
+  | some (info@(ConstantInfo.thmInfo _))  => Lean.Meta.getTheoremInfo info
+  | some (info@(ConstantInfo.defnInfo _)) => getDefInfoTemp info
+  | some info                             => pure (some info)
+  | none                                  => throwUnknownConstant constName
+
+private def isClassQuickConst? (constName : Name) : MetaM (LOption Name) := do
+  let env ← getEnv
+  if isClass env constName then
+    pure (LOption.some constName)
+  else
+    match (← getConstTemp? constName) with
+    | some _ => pure LOption.undef
+    | none   => pure LOption.none
+private partial def isClassQuick? : Expr → MetaM (LOption Name)
+  | Expr.bvar ..         => pure LOption.none
+  | Expr.lit ..          => pure LOption.none
+  | Expr.fvar ..         => pure LOption.none
+  | Expr.sort ..         => pure LOption.none
+  | Expr.lam ..          => pure LOption.none
+  | Expr.letE ..         => pure LOption.undef
+  | Expr.proj ..         => pure LOption.undef
+  | Expr.forallE _ _ b _ => isClassQuick? b
+  | Expr.mdata _ e _     => isClassQuick? e
+  | Expr.const n _ _     => isClassQuickConst? n
+  | Expr.mvar mvarId _   => do
+    match (← Lean.Meta.getExprMVarAssignment? mvarId) with
+    | some val => isClassQuick? val
+    | none     => pure LOption.none
+  | Expr.app f _ _       =>
+    match f.getAppFn with
+    | Expr.const n .. => isClassQuickConst? n
+    | Expr.lam ..     => pure LOption.undef
+    | _              => pure LOption.none
+private def fvarsSizeLtMaxFVars (fvars : Array Expr) (maxFVars? : Option Nat) : Bool :=
+  match maxFVars? with
+  | some maxFVars => fvars.size < maxFVars
+  | none          => true
+mutual
+  /--
+    `withNewLocalInstances isClassExpensive fvars j k` updates the vector or local instances
+    using free variables `fvars[j] ... fvars.back`, and execute `k`.
+
+    - `isClassExpensive` is defined later.
+    - The type class chache is reset whenever a new local instance is found.
+    - `isClassExpensive` uses `whnf` which depends (indirectly) on the set of local instances.
+      Thus, each new local instance requires a new `resettingSynthInstanceCache`. -/
+  private partial def withNewLocalInstancesImp
+      (fvars : Array Expr) (i : Nat) (k : MetaM α) : MetaM α := do
+    if h : i < fvars.size then
+      let fvar := fvars.get ⟨i, h⟩
+      let decl ← Lean.Meta.getFVarLocalDecl fvar
+      match (← isClassQuick? decl.type) with
+      | LOption.none   => withNewLocalInstancesImp fvars (i+1) k
+      | LOption.undef  =>
+        match (← isClassExpensive? decl.type) with
+        | none   => withNewLocalInstancesImp fvars (i+1) k
+        | some c => Lean.Meta.withNewLocalInstance c fvar <| withNewLocalInstancesImp fvars (i+1) k
+      | LOption.some c => Lean.Meta.withNewLocalInstance c fvar <| withNewLocalInstancesImp fvars (i+1) k
+    else
+      k
+  private partial def lambdaTelescopeReducingAuxAux
+      (reducing          : Bool) (maxFVars? : Option Nat)
+      (type              : Expr)
+      (k                 : Array Expr → Expr → MetaM α) : MetaM α := do
+    let rec process (lctx : LocalContext) (fvars : Array Expr) (j : Nat) (type : Expr) : MetaM α := do
+      match type with
+      | Expr.lam n d b c =>
+        if fvarsSizeLtMaxFVars fvars maxFVars? then
+          let d     := d.instantiateRevRange j fvars.size fvars
+          let fvarId ← mkFreshId
+          let lctx  := lctx.mkLocalDecl fvarId n d c.binderInfo
+          let fvar  := mkFVar fvarId
+          let fvars := fvars.push fvar
+          process lctx fvars j b
+        else
+          let type := type.instantiateRevRange j fvars.size fvars;
+          withReader (fun ctx => { ctx with lctx := lctx }) do
+            withNewLocalInstancesImp fvars j do
+              k fvars type
+      | _ =>
+        let type := type.instantiateRevRange j fvars.size fvars;
+        withReader (fun ctx => { ctx with lctx := lctx }) do
+          withNewLocalInstancesImp fvars j do
+            if reducing && fvarsSizeLtMaxFVars fvars maxFVars? then
+              let newType ← Lean.Meta.whnf type
+              if newType.isLambda then
+                process lctx fvars fvars.size newType
+              else
+                k fvars type
+            else
+              k fvars type
+    process (← getLCtx) #[] 0 type
+
+  private partial def lambdaTelescopeReducingAux (type : Expr) (maxFVars? : Option Nat) (k : Array Expr → Expr → MetaM α) : MetaM α := do
+    match maxFVars? with
+    | some 0 => k #[] type
+    | _ => do
+      let newType ← Lean.Meta.whnf type
+      if newType.isLambda then
+        lambdaTelescopeReducingAuxAux true maxFVars? newType k
+      else
+        k #[] type
+  
+  private partial def isClassExpensive? : Expr → MetaM (Option Name)
+    | type => Lean.Meta.withReducible <| -- when testing whether a type is a type class, we only unfold reducible constants.
+      lambdaTelescopeReducingAux type none fun xs type => do
+        let env ← getEnv
+        match type.getAppFn with
+        | Expr.const c _ _ => do
+          if isClass env c then
+            return some c
+          else
+            -- make sure abbreviations are unfolded
+            match (← Lean.Meta.whnf type).getAppFn with
+            | Expr.const c _ _ => return if isClass env c then some c else none
+            | _ => return none
+        | _ => return none
+
+  private partial def isClassImp? (type : Expr) : MetaM (Option Name) := do
+    match (← isClassQuick? type) with
+    | LOption.none   => pure none
+    | LOption.some c => pure (some c)
+    | LOption.undef  => isClassExpensive? type
+
+end
 -- Printing
+
+private partial def lambdaBoundedTelescopeImp2 (e : Expr) (consumeLet : Bool) (k : Array Expr → Expr → MetaM α) (maxDepth : Nat): MetaM α := do
+  let rec process (consumeLet : Bool) (lctx : LocalContext) (fvars : Array Expr) (j : Nat) (e : Expr) (maxDepth : Nat): MetaM α := do
+    match maxDepth, consumeLet, e with
+    | 0, _, _ =>
+      let e := e.instantiateRevRange j fvars.size fvars
+      withReader (fun ctx => { ctx with lctx := lctx }) do
+        withNewLocalInstancesImp fvars j do
+          k fvars e
+    | _, _, Expr.lam n d b c =>
+      let d := d.instantiateRevRange j fvars.size fvars
+      let fvarId ← mkFreshId
+      let lctx := lctx.mkLocalDecl fvarId n d c.binderInfo
+      let fvar := mkFVar fvarId
+      process consumeLet lctx (fvars.push fvar) j b (maxDepth - 1)
+    | _, true, Expr.letE n t v b _ => do
+      let t := t.instantiateRevRange j fvars.size fvars
+      let v := v.instantiateRevRange j fvars.size fvars
+      let fvarId ← mkFreshId
+      let lctx := lctx.mkLetDecl fvarId n t v
+      let fvar := mkFVar fvarId
+      process true lctx (fvars.push fvar) j b (maxDepth - 1)
+    | _, _, e =>
+      let e := e.instantiateRevRange j fvars.size fvars
+      withReader (fun ctx => { ctx with lctx := lctx }) do
+        withNewLocalInstancesImp fvars j do
+          k fvars e
+  process consumeLet (← getLCtx) #[] 0 e maxDepth
+
+/-- Similar to `forallTelescope` but for lambda expressions. -/
+def lambdaBoundedTelescope2 (type : Expr) (k : Array Expr → Expr → n α) (maxDepth : Nat): n α :=
+  Lean.Meta.map2MetaM (fun k => lambdaBoundedTelescopeImp2 type false k maxDepth) k
 
 def printExpr (e : Expr) (currNamespace : Name) : MetaM String := do toString (← PrettyPrinter.ppExpr currNamespace [] e)
 
@@ -152,19 +326,42 @@ def mkHeader (kind : String) (id : Name) (levelParams : List Name) (type : Expr)
     match resType with
     | Expr.sort _ _ => ()
     | _ =>
-    s := s ++ ": " ++ toString (← PrettyPrinter.ppExpr currNamespace [] resType)
+      s := s ++ ": " ++ toString (← PrettyPrinter.ppExpr currNamespace [] resType)
     s
   let stype : String ← liftMetaM (@Meta.forallBoundedTelescope MetaM _ _ _ type numParams formatType)
   
   return (← m.toString) ++ stype
 
 
+def containsAutoGenerated (value : Expr) : PortM Bool := do 
+    match value with
+    | Expr.forallE _ d b _   => (← containsAutoGenerated d) || (← containsAutoGenerated b)
+    | Expr.lam _ d b _       => (← containsAutoGenerated d) || (← containsAutoGenerated b)
+    | Expr.mdata _ e _       => (← containsAutoGenerated e)
+    | Expr.letE _ t v b _    => (← containsAutoGenerated t) || (← containsAutoGenerated v) || (← containsAutoGenerated b)
+    | Expr.app f a _         => (← containsAutoGenerated f) || (← containsAutoGenerated a)
+    | Expr.proj _ _ e _      => (← containsAutoGenerated e)
+    | Expr.const n _ _       => do
+      println! "found constant {n}"
+      let s ← get 
+      println! "  -> {(s.name2info.findD n {}).autoGenerated} {n.isInternal}"
+      return (s.name2info.findD n {}).autoGenerated || n.isInternal
+    | e                      => false
+
 def printDefLike (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (value : Expr) (currNamespace : Name) (safety := DefinitionSafety.safe) : PortM String := do
   let mut m : String := (← mkHeader kind id levelParams type currNamespace safety)
-  if useSorry then
+  if useSorry || (← containsAutoGenerated value) then
     m := m ++ " := sorry\n\n"
   else
-    m := m ++ " :=\n" ++ (toString (← liftMetaM $ PrettyPrinter.ppExpr currNamespace [] value))
+    println! "printing value {value}"
+    let numParams ← type.forallDepth []
+    println! "depth: {numParams}"
+    let formatValue (args : Array Expr) (resValue : Expr) : MetaM String := do 
+      toString (← PrettyPrinter.ppExpr currNamespace [] resValue)
+      
+    let svalue : String ← liftMetaM (@lambdaBoundedTelescope2 MetaM _ _ _ value formatValue numParams)
+
+    m := m ++ " :=\n  " ++ (svalue.replace '\n' "\n  ") ++ "\n\n"
   pure m
 
 def mkHeader' (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (isUnsafe : Bool) (currNamespace : Name) (numParams : Option Nat := none): PortM String :=
@@ -190,8 +387,8 @@ def findExtensions (id : Name) : PortM (Array Expr) := do
   println! "prefix: {extensionsPrefix}"
   let pos := (s.name2info.find! id).position
   for (name, info) in s.name2info.toArray do 
-    if name.toString.startsWith extensionsPrefix && info.position = pos then 
-      println! "candidate : {name}"
+    if name.toString.startsWith extensionsPrefix && not (name.toString = (extensionsPrefix ++ "fun")) && info.position = pos then 
+      println! "candidate : {name} of type {info.type}"
       res := res.push info.type.forallRoot
      
   return res
@@ -200,7 +397,7 @@ def extractStructureName (e : Expr) : Name := do
   match e with 
   | Expr.app e1 e2 _ => extractStructureName e1
   | Expr.const n _ _ => n
-  | _ => panic! "WRONG STRUCT FORMAT"
+  | _ => panic! s!"WRONG STRUCT FORMAT in {e}"
 
 def findFields (id : Name) : MetaM (List Name) := do 
 
@@ -220,15 +417,15 @@ def findFields (id : Name) : MetaM (List Name) := do
     
 
 
-  match (← getEnv).find? (`Mathlib ++ id) with
+  match (← getEnv).find? (id) with
   | ConstantInfo.inductInfo { levelParams := us, numParams := np, numIndices := numIndices, type := t, ctors := ctors, isUnsafe := u, .. } =>
     if ctors.length != 1 then 
-      panic! "{id} is not a struct (too many constructors)"
+      panic! s!"{id} is not a struct (too many constructors)"
     else 
       println! "real num params {np}"
       let cinfo ← getConstInfo ctors.head!
       return ← Meta.forallBoundedTelescope cinfo.type none (findFieldsAux np)
-  | _ => panic! "{id} is not a struct (not inductive type)"
+  | _ => panic! s!"{id} is not a struct (not inductive type)"
 
 def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndices : Nat) (type : Expr)
     (ctors : List Name) (isUnsafe : Bool) (currNamespace : Name) (keyword : String): PortM String := do
@@ -288,6 +485,7 @@ def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndi
         
         let mut i := 0
         for extension in extensions do 
+          println! "instanciating {extension}"
           let extension ← extension.liftLooseBVars 0 (fields.size - numParams - 1)
           
           println! "instanciating {extension}"

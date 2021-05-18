@@ -325,7 +325,7 @@ def fillDeclInfo (actionItem : ActionItem) : PortM Unit := do
       | Declaration.defnDecl defn => (f defn.name, defn.type)
       | Declaration.inductDecl lps nps [ind] iu => (f ind.name, ind.type)
       | _ => arbitrary
-    addInfo name "type" 0 type
+    addInfo name "type" 0 (← translate type)
   | _ => ()
 
 def fillUniverses (actionItem : ActionItem) : PortM Unit := do
@@ -554,6 +554,7 @@ def actionItemToSource (actionItem : ActionItem) : PortM String := do
     | Declaration.thmDecl thm => do
       let name := f thm.name
       let type ← translate thm.type
+      let value ← translate thm.value
 
       if not printIgnored && s.ignored.contains thm.name then 
         println! "ignored {name}"
@@ -571,7 +572,7 @@ def actionItemToSource (actionItem : ActionItem) : PortM String := do
         --     type     := type,
         --     isUnsafe := false -- TODO: what to put here?
         -- }
-        return (← printDefLike "theorem" name thm.levelParams type arbitrary s.currNamespace)
+        return (← printDefLike "theorem" name thm.levelParams type value s.currNamespace)
       else
         -- let value ← translate thm.value
         -- addDeclLoud thm.name $ Declaration.thmDecl {
@@ -580,11 +581,12 @@ def actionItemToSource (actionItem : ActionItem) : PortM String := do
         --     type  := type,
         --     value := value
         -- }
-        return (← printDefLike "theorem" name thm.levelParams type arbitrary s.currNamespace)
+        return (← printDefLike "theorem" name thm.levelParams type value s.currNamespace)
 
     | Declaration.defnDecl defn => do
       let name := f defn.name
       let type ← translate defn.type
+      let value ← translate defn.value
 
       if not printIgnored && s.ignored.contains defn.name then 
         println! "ignored {name}"
@@ -608,7 +610,7 @@ def actionItemToSource (actionItem : ActionItem) : PortM String := do
       --     value := value,
       --     hints := defn.hints
       -- }
-      return (← printDefLike "def" name defn.levelParams type arbitrary s.currNamespace defn.safety)
+      return (← printDefLike "def" name defn.levelParams type value s.currNamespace defn.safety)
 
     | Declaration.inductDecl lps nps [ind] iu => do
       let name := f ind.name
