@@ -29,4 +29,4 @@ unsafe def main (args : List String) : IO Unit := do
     | _         => throw $ IO.userError "Second argument <lib> must be 'lean3' or 'mathlib'"
   | _ => throw $ IO.userError "Expected <proof> <lib>"
 
-#eval main ["0", "1", "mathlib", "algebra/algebra/basic"]
+#eval main ["0", "1", "mathlib", "all"]
