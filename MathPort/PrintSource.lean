@@ -52,12 +52,12 @@ def containsStrAux : (s : List Char) →  (subStr : List Char) → Bool
 def String.containsStr (s : String) (subStr : String) : Bool :=
   containsStrAux s.data subStr.data
 
-def replaceAux (c : Char) (toInsert : String): List Char → List Char 
-  | c₁::t => if c₁ = c then toInsert.data ++ (replaceAux c toInsert t) else c₁::(replaceAux c toInsert t)
-  | [] => []
+def replaceAux (c : Char) (toInsert : String) (prev : List Char): List Char → List Char 
+  | c₁::t => if c₁ = c then (replaceAux c toInsert (prev ++ toInsert.data) t) else (replaceAux c toInsert (prev ++ [c₁]) t)
+  | [] => prev
 
 def String.replace (s : String) (c : Char) (toInsert : String) : String :=
-  ⟨replaceAux c toInsert s.data⟩
+  ⟨replaceAux c toInsert [] s.data⟩
 
 def countAux (c : Char) : List Char → Nat
   | c₁::t => if c₁ = c then Nat.succ (countAux c t) else countAux c t
@@ -86,6 +86,17 @@ def Lean.Name.removePrefix (n : Name) (pfx : Name) : IO Name :=
       Name.anonymous
     | Name.str p s _ => do Name.mkStr (← removePrefix p pfx) s
     | Name.num p n _ => do Name.mkNum (← removePrefix p pfx) n
+
+
+
+
+def rip : (Std.Format) → String
+  | Std.Format.nil  => "nil"
+  | Std.Format.line => "line"
+  | Std.Format.text s  => s!"text \"{s}\""
+  | Std.Format.append f₁ f₂ => s!"merge\n  {(rip f₁).replace '\n' "\n  "}\n  {(rip f₂).replace '\n' "\n  "}"
+  | Std.Format.nest x f => s!"nest {x}\n  {(rip f).replace '\n' "\n  "}"
+  | Std.Format.group f x => s!"group\n  {(rip f).replace '\n' "\n  "}"
 
 def listMetaM {α : Type _} (l : List (MetaM α)) : MetaM (List α) :=
   match l with 
@@ -282,7 +293,7 @@ def lambdaBoundedTelescope (type : Expr) (k : Array Expr → Expr → n α) (max
 
 -- Printing
 
-def printExpr (e : Expr) (currNamespace : Name) : MetaM String := do toString (← PrettyPrinter.ppExpr currNamespace [] e)
+def printExpr (e : Expr) (currNamespace : Name) : MetaM Format := do PrettyPrinter.ppExpr currNamespace [] e
 
 def levelParamsToMessageData (levelParams : List Name) : MessageData :=
   match levelParams with
@@ -294,7 +305,7 @@ def levelParamsToMessageData (levelParams : List Name) : MessageData :=
     return m ++ "}"
 
 
-def mkHeader (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) (safety : DefinitionSafety) (numParams : Option Nat := none): PortM String := do
+def mkHeader (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) (safety : DefinitionSafety) (numParams : Option Nat := none): PortM Format := do
   let info ← (← get).name2info.find! id
   let m : MessageData :=
     if info.simp then "@[simp] " else ""
@@ -321,29 +332,32 @@ def mkHeader (kind : String) (id : Name) (levelParams : List Name) (type : Expr)
     if numParams.isNone then some $ type.forallDepth []
     else numParams
 
-  let formatType (args : Array Expr) (resType : Expr) : MetaM String := do 
-    let mut s := ""
-    for arg in args do
+  let formatType (args : Array Expr) (resType : Expr) : MetaM Format := do 
+    let mut s : Format := ""
+    for arg in args.reverse do
       let argType ← Meta.inferType arg
       let localDecl ← Meta.getFVarLocalDecl arg
       match localDecl.binderInfo with
-      | BinderInfo.default        => s := s ++ "(" ++ (← printExpr arg currNamespace) ++ " : " ++ (← printExpr argType currNamespace) ++ ") "
-      | BinderInfo.implicit       => s := s ++ "{" ++ (← printExpr arg currNamespace) ++ " : " ++ (← printExpr argType currNamespace) ++ "} "
-      | BinderInfo.strictImplicit => s := s ++ "⦃" ++ (← printExpr arg currNamespace) ++ " : " ++ (← printExpr argType currNamespace) ++ "⦄ "
+      | BinderInfo.default        => s := Format.group $ Format.nest 2 $ Format.group ("(" ++ (← printExpr arg currNamespace) ++ " : " ++ (← printExpr argType currNamespace) ++ ")") ++ Format.line ++ s
+      | BinderInfo.implicit       => s := Format.group $ Format.nest 2 $ Format.group ("{" ++ (← printExpr arg currNamespace) ++ " : " ++ (← printExpr argType currNamespace) ++ "}") ++ Format.line ++ s
+      | BinderInfo.strictImplicit => s := Format.group $ Format.nest 2 $ Format.group ("⦃" ++ (← printExpr arg currNamespace) ++ " : " ++ (← printExpr argType currNamespace) ++ "⦄") ++ Format.line ++ s
       | BinderInfo.instImplicit   => do
           let str ← printExpr arg currNamespace
-          if str.startsWith "_" then
-            s := s ++ "[" ++ (← printExpr argType currNamespace) ++ "] "
+          if (toString str).startsWith "_" then
+            s := Format.group $ Format.nest 2 $ Format.group ("[" ++ (← printExpr argType currNamespace) ++ "]") ++ Format.line ++ s
           else 
-            s := s ++ "[" ++ (← printExpr arg currNamespace) ++ " : " ++ (← printExpr argType currNamespace) ++ "] "
+            s := Format.group $ Format.nest 2 $ Format.group ("[" ++ (← printExpr arg currNamespace) ++ " : " ++ (← printExpr argType currNamespace) ++ "]") ++ Format.line ++ s
       | BinderInfo.auxDecl        => println! "ERROR: argument {arg} is auxDecl"
     match resType with
     | Expr.sort _ _ => ()
     | _ =>
-      s := s ++ ": " ++ toString (← PrettyPrinter.ppExpr currNamespace [] resType)
+      s := Format.group $ s ++ " :" ++ Format.line ++ (← PrettyPrinter.ppExpr currNamespace [] resType) ++ " "
     s
-  let stype : String ← liftMetaM (@Meta.forallBoundedTelescope MetaM _ _ _ type numParams formatType)
-  
+  let stype : Format ← liftMetaM (@Meta.forallBoundedTelescope MetaM _ _ _ type numParams formatType)
+  let f ← liftMetaM $ PrettyPrinter.ppExpr currNamespace [] type
+  -- if (toString f).length < 500 then
+    -- println! "type: {f}"
+    -- println! "RIPTYPE {id}\n{rip f}"
   return (← m.toString) ++ stype
 
 
@@ -382,35 +396,37 @@ def replaceAutoGenerated (id : Name) (value : Expr) : PortM Expr := do
         return e
     | e                      => e
 
-def printDefLike (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (value : Expr) (currNamespace : Name) (safety := DefinitionSafety.safe) : PortM String := do
-  let mut m : String := (← mkHeader kind id levelParams type currNamespace safety)
+def printDefLike (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (value : Expr) (currNamespace : Name) (safety := DefinitionSafety.safe) : PortM Format := do
+  let mut m : Format := (← mkHeader kind id levelParams type currNamespace safety)
   if useSorry then
-    m := m ++ " := sorry\n\n"
+    m := m ++ ":= sorry\n\n"
   else
-    println! "printing value {value}"
+    -- println! "printing value {value}"
     let numParams ← type.forallDepth []
     println! "depth: {numParams}"
     let value ← replaceAutoGenerated id value
-    let formatValue (args : Array Expr) (resValue : Expr) : MetaM String := do 
-      toString (← PrettyPrinter.ppExpr currNamespace [] resValue)
+    let formatValue (args : Array Expr) (resValue : Expr) : MetaM Format := do 
+      (← PrettyPrinter.ppExpr currNamespace [] resValue)
       
-    let svalue : String ← liftMetaM (@lambdaBoundedTelescope MetaM _ _ _ value formatValue numParams)
+    let fvalue : Format ← liftMetaM (@lambdaBoundedTelescope MetaM _ _ _ value formatValue numParams)
+    
+    let svalue := toString fvalue
     if svalue.length > 1000 then
-      m := m ++ " := sorry\n\n"
+      m := m ++ ":= sorry\n\n"
     else
       if (kind = "theorem" && svalue.count '\n' > 2) then 
-        m := m ++ " := sorry\n\n"
+        m := m ++ ":= sorry\n\n"
       else
-        m := m ++ " :=\n  " ++ (svalue.replace '\n' "\n  ") ++ "\n\n"
+        m := m ++ ":=\n  " ++ (svalue.replace '\n' "\n  ") ++ "\n\n"
   pure m
 
-def mkHeader' (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (isUnsafe : Bool) (currNamespace : Name) (numParams : Option Nat := none): PortM String :=
+def mkHeader' (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (isUnsafe : Bool) (currNamespace : Name) (numParams : Option Nat := none): PortM Format :=
   mkHeader kind id levelParams type currNamespace (if isUnsafe then DefinitionSafety.unsafe else DefinitionSafety.safe) numParams
 
-def printAxiomLike (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) (isUnsafe := false) : PortM String := do
+def printAxiomLike (kind : String) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) (isUnsafe := false) : PortM Format := do
   mkHeader' kind id levelParams type isUnsafe currNamespace
 
-def printQuot (kind : QuotKind) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) : PortM String := do
+def printQuot (kind : QuotKind) (id : Name) (levelParams : List Name) (type : Expr) (currNamespace : Name) : PortM Format := do
   printAxiomLike "Quotient primitive" id levelParams type currNamespace
 
 def findExtensions (id : Name) : PortM (Array Expr) := do 
@@ -468,7 +484,7 @@ def findFields (id : Name) : MetaM (List Name) := do
   | _ => panic! s!"{id} is not a struct (not inductive type)"
 
 def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndices : Nat) (type : Expr)
-    (ctors : List Name) (isUnsafe : Bool) (currNamespace : Name) (keyword : String): PortM String := do
+    (ctors : List Name) (isUnsafe : Bool) (currNamespace : Name) (keyword : String): PortM Format := do
   let info ← (← get).name2info.find! id
 
   let mut struct := false
@@ -514,8 +530,8 @@ def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndi
     let ctor ← ctors.head!
     println! "constructor: {ctor}"
 
-    let formatFields (fields : Array Expr) (resType : Expr) : MetaM String := do 
-      let mut s := ""
+    let formatFields (fields : Array Expr) (resType : Expr) : MetaM Format := do 
+      let mut s : Format := ""
       let mut fields2Ignore := []
       if extensions != #[] then 
         s := s ++ "\nextends "
@@ -559,8 +575,8 @@ def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndi
         i := i + 1
       s
 
-    let formatFieldsCustomCtor (fields : Array Expr) (resType : Expr) : MetaM String := do 
-      let mut s := ""
+    let formatFieldsCustomCtor (fields : Array Expr) (resType : Expr) : MetaM Format := do 
+      let mut s : Format := ""
       if extensions != #[] then 
         s := s ++ "\nextends "
         for extension in extensions do 
@@ -590,8 +606,8 @@ def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndi
     let mut m ← mkHeader' kind id levelParams type isUnsafe currNamespace numParams
     m := m ++ "\nwhere"
 
-    let formatCtorType (args : Array Expr) (resType : Expr) : MetaM String := do 
-      let mut s := ""
+    let formatCtorType (args : Array Expr) (resType : Expr) : MetaM Format := do 
+      let mut s : Format := ""
       let mut explicit := false
       for arg in args do
         let localDecl ← Meta.getFVarLocalDecl arg
@@ -609,7 +625,7 @@ def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndi
     return m ++ "\n\n"
 
 def printStruct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndices : Nat) (type : Expr)
-    (ctors : List Name) (isUnsafe : Bool) (currNamespace : Name) : PortM String := do
+    (ctors : List Name) (isUnsafe : Bool) (currNamespace : Name) : PortM Format := do
   let mut m ← mkHeader' "structure" id levelParams type isUnsafe currNamespace
   m := m ++ "\nwhere"
   for ctor in ctors do
@@ -619,7 +635,7 @@ def printStruct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndi
 
 
 
-def constantToString (id : Name) (currNamespace : Name) (keyword : String): PortM String := do
+def constantToString (id : Name) (currNamespace : Name) (keyword : String): PortM Format := do
   match (← getEnv).find? id with
   | ConstantInfo.defnInfo  { levelParams := us, type := t, value := v, safety := s, .. } => printDefLike "def" id us t v currNamespace s 
   | ConstantInfo.thmInfo  { levelParams := us, type := t, value := v, .. } => printDefLike "theorem" id us t v currNamespace

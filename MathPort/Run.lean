@@ -210,6 +210,9 @@ def genOLeanFor (proofs : Bool) (source : Bool) (target : Path34) : IO Unit := d
             let sourceStr ← actionItemToSource actionItem
             modify λ s => { s with currLine := newPos}
             hsource4.putStr sourceStr
+        
+        if source then
+          hsource4.putStr "end Mathlib"
       let env ← getEnv
       writeModule env target.toLean4olean
       println! s!"[genOLeanFor] END   {target.mrpath.path}"

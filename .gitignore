@@ -8,3 +8,4 @@ mathport
 Lib4/build 
 Lib4/Lean3Lib 
 Lib4/Mathlib
+.leanpkg-lock
