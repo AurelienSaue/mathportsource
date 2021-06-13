@@ -431,7 +431,7 @@ def printQuot (kind : QuotKind) (id : Name) (levelParams : List Name) (type : Ex
   printAxiomLike "Quotient primitive" id levelParams type currNamespace
 
 def findExtensions (id : Name) : PortM (Array Expr) := do 
-
+  -- TODO : Would be more clever to use the constructor
   let getResType (fields : Array Expr) (resType : Expr) : MetaM Expr := do 
       println! "rt"
       println! "resType: {(← printExpr resType Name.anonymous)}"
@@ -533,7 +533,7 @@ def printInduct (id : Name) (levelParams : List Name) (numParams : Nat) (numIndi
 
     let formatFields (fields : Array Expr) (resType : Expr) : MetaM Format := do 
       let mut f : Format := header
-      let mut fields2Ignore := []
+      let mut fields2Ignore := [] -- TODO : This list is useless (the fields of the extended structures are not in the constructor)
       if extensions != #[] then 
         let mut fextensions : Format := "extends" ++ Format.line
         println! "fields"
